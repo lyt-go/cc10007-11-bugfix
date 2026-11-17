@@ -4,6 +4,7 @@
 """
 from __future__ import annotations
 
+import threading
 from typing import Any
 
 from app.seed import SEED_ROWS
@@ -14,6 +15,9 @@ class Store:
         self._tables: dict[str, list[dict[str, Any]]] = {
             name: [dict(row) for row in rows] for name, rows in SEED_ROWS.items()
         }
+        # 内存仓库的写操作要串行：模型下线传播、替代分析发布、数据集保存都会改多张表，
+        # 高并发下必须保证同一指标分析只落一个处理终点、只对应一个有效数据集。
+        self.lock = threading.RLock()
 
     def module_names(self) -> list[str]:
         return sorted(self._tables)
@@ -27,9 +31,20 @@ class Store:
                 return row
         return None
 
+    def find_by(self, module: str, field: str, value: Any) -> dict[str, Any] | None:
+        for row in self.rows(module):
+            if row.get(field) == value:
+                return row
+        return None
+
+    def next_id(self, module: str) -> int:
+        return max((int(row.get("id", 0)) for row in self.rows(module)), default=0) + 1
+
     def overview(self) -> dict[str, object]:
         modules: list[dict[str, object]] = []
         for name in self.module_names():
+            if name in {"attribution_batch", "attribution_dataset", "attribution_receipt"}:
+                continue
             rows = self.rows(name)
             modules.append({
                 "name": name,

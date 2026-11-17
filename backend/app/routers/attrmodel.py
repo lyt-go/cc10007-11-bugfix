@@ -1,4 +1,4 @@
-"""归因建模接口：维护归因模型，覆盖提交模型评审、发布模型、下线模型等动作。"""
+"""归因建模接口：维护归因模型，覆盖提交模型评审、评审通过、发布模型、下线模型等动作。"""
 from __future__ import annotations
 
 from typing import Any
@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException, Query
 
 from app.schemas import ActionResult, EntryPayload, PageResult
 from app.services.attrmodel import AttrmodelService
+from app.services.attribution_rules import rule_spec
 
 router = APIRouter(prefix="/api/attrmodel", tags=["归因建模"])
 
@@ -30,6 +31,26 @@ def list_entries(
     return PageResult(items=items, total=total, page=page, size=size)
 
 
+@router.get("/export")
+def export_entries() -> dict[str, Any]:
+    """导出归因建模清单：返回当前过滤条件下的全量数据。"""
+    items, total = service.list_entries(page=1, size=10000)
+    return {"module": "attrmodel", "total": total, "items": items}
+
+
+@router.get("/rule")
+def rule() -> dict[str, Any]:
+    """归因建模规范口径（核验码 113b54c4）：阈值、允许范围与上限。"""
+    return rule_spec()
+
+
+@router.get("/receipts")
+def receipts(model_no: str | None = Query(default=None, description="按模型编号过滤下线回执")) -> dict[str, Any]:
+    """模型下线回执：每次下线的传播范围、替代模型和下游复算范围都可追溯。"""
+    items = service.receipts(model_no)
+    return {"module": "attrmodel", "total": len(items), "items": items}
+
+
 @router.get("/{entry_id}", response_model=dict)
 def get_entry(entry_id: int) -> dict:
     """读取单条归因模型明细；不存在时给出可读的错误说明。"""
@@ -42,7 +63,7 @@ def get_entry(entry_id: int) -> dict:
 @router.post("", response_model=ActionResult)
 def create_entry(payload: EntryPayload) -> ActionResult:
     """登记一条归因模型，缺字段时说明原因而不是静默丢弃。"""
-    entry, missing = service.create_entry(payload.values)
+    entry, missing = service.create_entry(payload.merged_values())
     if missing:
         return ActionResult(ok=False, message=f"缺少必填字段：{'、'.join(missing)}")
     return ActionResult(ok=True, message="归因模型已登记", entry=entry)
@@ -50,16 +71,15 @@ def create_entry(payload: EntryPayload) -> ActionResult:
 
 @router.post("/{entry_id}/actions", response_model=ActionResult)
 def run_action(entry_id: int, payload: EntryPayload) -> ActionResult:
-    """对单条归因模型执行提交模型评审、发布模型、下线模型；不允许的动作会被拦下并说明原因。"""
-    action = str(payload.values.get("action") or "").strip()
-    entry, message = service.run_action(entry_id, action)
+    """对单条归因模型执行评审、发布、下线；不允许的动作会被拦下并说明原因。"""
+    values = payload.merged_values()
+    action = str(values.get("action") or "").strip()
+    entry, message, effects = service.run_action(
+        entry_id,
+        action,
+        analyst=str(values.get("operator") or "值班管理员"),
+        replacement_model_no=values.get("替代模型编号"),
+    )
     if entry is None:
         return ActionResult(ok=False, message=message)
-    return ActionResult(ok=True, message=message, entry=entry)
-
-
-@router.get("/export")
-def export_entries() -> dict[str, Any]:
-    """导出归因建模清单：返回当前过滤条件下的全量数据。"""
-    items, total = service.list_entries(page=1, size=10000)
-    return {"module": "attrmodel", "total": total, "items": items}
+    return ActionResult(ok=True, message=message, entry=entry, effects=effects)

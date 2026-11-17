@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any, Generic, TypeVar
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 T = TypeVar("T")
 
@@ -19,13 +19,27 @@ class ActionResult(BaseModel):
     ok: bool
     message: str
     entry: dict[str, Any] | None = None
+    effects: dict[str, Any] | None = None
 
 
 class EntryPayload(BaseModel):
-    """登记或修改一条业务记录时提交的字段集合。"""
+    """登记或修改一条业务记录时提交的字段集合。
+
+    前端历史上把动作写成顶层 ``{"action": "..."}``，后端只认 ``{"values": {"action": ...}}``，
+    结果动作请求一路返回 200 但业务没生效，页面看起来像「点了没反应、卡住」。
+    这里统一兼容两种写法：顶层字段合并进 values，历史调用方不需要改。
+    """
+
+    model_config = ConfigDict(extra="allow")
 
     values: dict[str, Any] = Field(default_factory=dict)
     remark: str | None = None
+
+    def merged_values(self) -> dict[str, Any]:
+        merged = dict(self.values or {})
+        for key, value in (self.model_extra or {}).items():
+            merged.setdefault(key, value)
+        return merged
 
 
 

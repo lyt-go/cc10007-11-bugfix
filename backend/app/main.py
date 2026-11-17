@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
 from app.routers import ROUTERS
+from app.services.reconcile import reconcile
 from app.store import store
 
 app = FastAPI(title="智能运营决策分析平台", version="1.0.0")
@@ -24,6 +25,9 @@ app.add_middleware(
 
 for module in ROUTERS:
     app.include_router(module.router)
+
+# 启动自检：清掉「已下线模型仍在支撑当前指标根因」的历史残留
+RECONCILED = reconcile()
 
 
 @app.get("/api/health")

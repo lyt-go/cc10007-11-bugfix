@@ -74,6 +74,43 @@ npm run dev
   `backend/app/routers/<模块>.py`，业务规则在 `backend/app/services/<模块>.py`。
 - 列表接口统一返回 `{ items, total, page, size }`，动作接口统一返回 `{ ok, message }`。
 - 状态流转只允许在 `app/services` 里改，路由层不做业务判断。
+- 动作请求体既支持 `{"values": {"action": "..."}}`，也支持历史的顶层 `{"action": "..."}`；
+  路由统一用 `payload.merged_values()` 取值，避免动作静默失效。
+- `/export`、`/rule` 这类固定路径必须声明在 `/{entry_id}` 之前，否则会被整数路径参数吃掉。
+
+## 归因建模 ↔ 指标下钻（核验码 11500547 / 口径 113b54c4）
+
+归因模型生命周期与指标根因是一条链，规则集中在：
+
+- `backend/app/services/attribution_rules.py`：规范口径（单触点允许范围、权重合计阈值、触点数上限）
+  与贡献度重算；归因建模和指标下钻共用这一份判定。
+- `backend/app/services/attribution_ledger.py`：数据集编号、落库凭证、处理终点、失效作废的公共写入。
+- `backend/app/services/attrmodel.py`：模型状态机、下线回执与向指标下钻的传播。
+- `backend/app/services/metricdrill.py`：指标分析状态机、数据集保存/落定、重新分析、验证核对。
+- `backend/app/services/reconcile.py`：启动自检，清掉「已下线模型仍在支撑当前根因」的历史残留。
+
+关键口径：
+
+| 约束 | 表现 |
+| --- | --- |
+| 评审中不能直接发布 | `发布模型` 需要「模型评审中」且评审结论为「通过」 |
+| 下线传播 | 生成 `ATRC-*` 回执，引用该模型的指标分析转「来源已失效」，标待选模型、保留来源失效时间 |
+| 已下线模型 | 不能保存新数据集、不能重新分析、不能确认结论；当前根因让位到 `失效前根因` |
+| 原告警时点 | `原直接贡献率` / `原间接贡献率` 只在首次记录时写入，之后不再改写 |
+| 单一处理终点 | 同一指标分析只有一个 `已选处理终点`，`处理终点历史` 记录被取代的终点 |
+| 有效数据集唯一 | 每条指标分析最多一个 `有效标记=true` 的数据集，作废的保留凭证 |
+| 数据编号复查 | `GET /api/metricdrill/datasets/{数据编号}` 返回是否仍支撑当前根因、作废凭证与原告警时点贡献率 |
+
+接口：
+
+- `GET /api/attrmodel/rule`、`GET /api/attrmodel/receipts`
+- `GET /api/metricdrill/rule`、`GET /api/metricdrill/datasets`、`GET /api/metricdrill/datasets/{数据编号}`
+- `GET /api/metricdrill/{id}/detail`（当前根因、有效数据集、待选模型、异常批次、落库凭证）
+- `POST /api/metricdrill/{id}/actions`（`重新分析`、`保存归因明细数据集`、`标记来源失效`、`核对验证结果`）
+- `POST /api/metricdrill/{id}/datasets/settle`（把待处理数据集落定）
+
+前端指标下钻详情页在 `/metricdrill/:id`，列表页的排名与「下钻明细」都进入同一页；
+归因建模页展示下线回执，两个页面不会出现一侧有新根因、另一侧还挂着已下线模型结论的错位。
 
 领域：数据工程
 子方向：数据分析与数据应用
